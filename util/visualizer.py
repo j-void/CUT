@@ -58,11 +58,11 @@ class Visualizer:
         self.win_size = opt.display_winsize
         self.name = opt.name
         self.saved = False
-        self.use_wandb = True #opt.use_wandb
+        self.use_wandb = False  #opt.use_wandb
         self.current_epoch = 0
 
         # Initialize wandb if enabled
-        if True:
+        if self.use_wandb:
             # Only initialize wandb on main process (rank 0)
             if not dist.is_initialized() or dist.get_rank() == 0:
                 self.wandb_project_name = "CUT" #getattr(opt, "wandb_project_name", "CycleGAN-and-pix2pix")
@@ -101,7 +101,7 @@ class Visualizer:
         # if "LOCAL_RANK" in os.environ and dist.is_initialized() and dist.get_rank() != 0:
         #     return
         
-        if True:
+        if self.use_wandb:
             ims_dict = {}
             for label, image in visuals.items():
                 image_numpy = util.tensor2im(image)
@@ -142,7 +142,7 @@ class Visualizer:
         # if dist.is_initialized() and dist.get_rank() != 0:
         #     return
 
-        if True:
+        if self.use_wandb:
             self.wandb_run.log(losses, step=total_iters)
 
     def print_current_losses(self, epoch, iters, losses, t_comp, t_data):
