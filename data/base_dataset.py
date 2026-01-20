@@ -8,6 +8,7 @@ import torch.utils.data as data
 from PIL import Image
 import torchvision.transforms as transforms
 from abc import ABC, abstractmethod
+import torch
 
 
 class BaseDataset(data.Dataset, ABC):
@@ -79,7 +80,8 @@ def get_params(opt, size):
     return {'crop_pos': (x, y), 'flip': flip}
 
 
-def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True):
+def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True, is_mask=False):
+    convert = False if is_mask else convert
     transform_list = []
     if grayscale:
         transform_list.append(transforms.Grayscale(1))
@@ -116,14 +118,16 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
     # if opt.preprocess == 'none':
     transform_list.append(transforms.Lambda(lambda img: __make_power_2(img, base=4, method=method)))
 
-    if not opt.no_flip:
-        if params is None or 'flip' not in params:
-            transform_list.append(transforms.RandomHorizontalFlip())
-        elif 'flip' in params:
-            transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))
-
-    if convert:
+    # if not opt.no_flip:
+    #     if params is None or 'flip' not in params:
+    #         transform_list.append(transforms.RandomHorizontalFlip())
+    #     elif 'flip' in params:
+    #         transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))
+    if not is_mask:
         transform_list += [transforms.ToTensor()]
+    else:
+        transform_list += [transforms.Lambda(lambda img: torch.from_numpy(np.array(img)).long())]
+    if convert:
         if grayscale:
             transform_list += [transforms.Normalize((0.5,), (0.5,))]
         else:

@@ -72,11 +72,13 @@ class CUTModel(BaseModel):
             self.model_names = ['G']
 
         # define networks (both generator and discriminator)
+        opt.input_nc = 3
+        opt.output_nc = 2
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, opt.no_antialias_up, self.gpu_ids, opt)
         self.netF = networks.define_F(opt.input_nc, opt.netF, opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
         if self.isTrain:
-            self.netD = networks.define_D(opt.output_nc, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
+            self.netD = networks.define_D(3, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
@@ -141,6 +143,8 @@ class CUTModel(BaseModel):
         AtoB = self.opt.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
+        self.real_A_mask = input['A_mask' if AtoB else 'B_mask'].to(self.device)
+        self.real_B_mask = input['B_mask' if AtoB else 'A_mask'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
@@ -151,7 +155,9 @@ class CUTModel(BaseModel):
             if self.flipped_for_equivariance:
                 self.real = torch.flip(self.real, [3])
 
-        self.fake = self.netG(self.real)
+        self.fake_green_blue = self.netG(self.real)
+        self.fake = torch.cat([self.real[:,0:1,:,:], self.fake_green_blue], dim=1)   
+
         self.fake_B = self.fake[:self.real_A.size(0)]
         if self.opt.nce_idt:
             self.idt_B = self.fake[self.real_A.size(0):]

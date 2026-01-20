@@ -32,6 +32,20 @@ def make_dataset(dir, max_dataset_size=float("inf")):
                 images.append(path)
     return images[:min(max_dataset_size, len(images))]
 
+def make_mask_dataset(dir, mask_dir, max_dataset_size=float("inf")):
+    images = []
+    masks = []
+    assert os.path.isdir(dir) or os.path.islink(dir), '%s is not a valid directory' % dir
+
+    for root, _, fnames in sorted(os.walk(dir, followlinks=True)):
+        for fname in fnames:
+            if is_image_file(fname):
+                path = os.path.join(root, fname)
+                images.append(path)
+                mask_path = os.path.join(mask_dir, fname)
+                masks.append(mask_path)
+    return sorted(images[:min(max_dataset_size, len(images))]), sorted(masks[:min(max_dataset_size, len(masks))])
+
 
 def default_loader(path):
     return Image.open(path).convert('RGB')
