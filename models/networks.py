@@ -279,6 +279,8 @@ def define_F(input_nc, netF, norm='batch', use_dropout=False, init_type='normal'
         net = PatchSampleF(use_mlp=True, init_type=init_type, init_gain=init_gain, gpu_ids=gpu_ids, nc=opt.netF_nc)
     elif netF == 'strided_conv':
         net = StridedConvF(init_type=init_type, init_gain=init_gain, gpu_ids=gpu_ids)
+    elif netF == 'masked_sample':
+        net = MaskAwarePatchSampleF(use_mlp=True, init_type=init_type, init_gain=init_gain, gpu_ids=gpu_ids, nc=opt.netF_nc)
     else:
         raise NotImplementedError('projection model name [%s] is not recognized' % netF)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -580,6 +582,132 @@ class PatchSampleF(nn.Module):
             if num_patches == 0:
                 x_sample = x_sample.permute(0, 2, 1).reshape([B, x_sample.shape[-1], H, W])
             return_feats.append(x_sample)
+        return return_feats, return_ids
+
+class MaskAwarePatchSampleF(nn.Module):
+    def __init__(
+        self,
+        use_mlp=False,
+        init_type='normal',
+        init_gain=0.02,
+        nc=256,
+        gpu_ids=[]
+    ):
+        super().__init__()
+        self.l2norm = Normalize(2)
+        self.use_mlp = use_mlp
+        self.nc = nc
+        self.mlp_init = False
+        self.init_type = init_type
+        self.init_gain = init_gain
+        self.gpu_ids = gpu_ids
+
+    def create_mlp(self, feats):
+        for mlp_id, feat in enumerate(feats):
+            input_nc = feat.shape[1]
+            mlp = nn.Sequential(
+                nn.Linear(input_nc, self.nc),
+                nn.ReLU(),
+                nn.Linear(self.nc, self.nc)
+            )
+            if len(self.gpu_ids) > 0:
+                mlp.cuda()
+            setattr(self, f'mlp_{mlp_id}', mlp)
+
+        init_net(self, self.init_type, self.init_gain, self.gpu_ids)
+        self.mlp_init = True
+
+    def forward(
+        self,
+        feats,
+        masks=None,
+        num_patches=64,
+        patch_ids=None
+    ):
+        """
+        feats: list of [B,C,H,W]
+        masks: list of [B,H,W] or None
+        """
+
+        return_feats = []
+        return_ids = []
+
+        if self.use_mlp and not self.mlp_init:
+            self.create_mlp(feats)
+
+        for feat_id, feat in enumerate(feats):
+            B, C, H, W = feat.shape
+            feat_flat = feat.permute(0, 2, 3, 1).reshape(B, H * W, C)
+
+            # ----- mask handling -----
+            if masks is not None:
+                mask = masks[feat_id].view(B, H * W).bool()
+                valid_ids = mask.nonzero(as_tuple=False)[:, 1]
+                if valid_ids.numel() < 4:
+                    continue  # skip this layer if too few valid patches
+            else:
+                mask = None
+
+            
+
+            layer_patch_ids = []
+
+            # ----- sample patch indices per batch -----
+            for b in range(B):
+                if patch_ids is not None:
+                    idx = patch_ids[feat_id][b]
+                else:
+                    if mask is not None:
+                        valid = torch.nonzero(mask[b], as_tuple=False).squeeze(1)
+                        if valid.numel() == 0:
+                            layer_patch_ids.append(None)
+                            continue
+                    else:
+                        valid = torch.arange(
+                            H * W, device=feat.device
+                        )
+
+                    if valid.numel() >= num_patches:
+                        idx = valid[
+                            torch.randperm(valid.numel(), device=feat.device)[:num_patches]
+                        ]
+                    else:
+                        idx = valid[
+                            torch.randint(
+                                0, valid.numel(), (num_patches,), device=feat.device
+                            )
+                        ]
+
+                layer_patch_ids.append(idx)
+
+            # ----- gather patches -----
+            patches = []
+            final_ids = []
+
+            for b, idx in enumerate(layer_patch_ids):
+                if idx is None:
+                    continue
+                patches.append(feat_flat[b, idx])
+                final_ids.append(idx)
+
+            if len(patches) == 0:
+                return_feats.append(None)
+                return_ids.append(None)
+                continue
+
+            x_sample = torch.cat(patches, dim=0)
+
+            # ----- MLP projection -----
+            if self.use_mlp:
+                mlp = getattr(self, f'mlp_{feat_id}')
+                x_sample = mlp(x_sample)
+
+            # ----- L2 normalization (safe) -----
+            x_sample = self.l2norm(x_sample)
+
+            return_feats.append(x_sample)
+            return_ids.append(final_ids)
+
         return return_feats, return_ids
 
 

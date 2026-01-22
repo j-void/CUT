@@ -58,7 +58,7 @@ class Visualizer:
         self.win_size = opt.display_winsize
         self.name = opt.name
         self.saved = False
-        self.use_wandb = False  #opt.use_wandb
+        self.use_wandb = True  #opt.use_wandb
         self.current_epoch = 0
 
         # Initialize wandb if enabled

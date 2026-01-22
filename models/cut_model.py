@@ -76,6 +76,7 @@ class CUTModel(BaseModel):
         opt.output_nc = 2
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, opt.no_antialias_up, self.gpu_ids, opt)
         self.netF = networks.define_F(opt.input_nc, opt.netF, opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
+        self.netF_masked = networks.define_F(opt.input_nc, "masked_sample", opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
         if self.isTrain:
             self.netD = networks.define_D(3, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
@@ -109,7 +110,7 @@ class CUTModel(BaseModel):
             self.compute_D_loss().backward()                  # calculate gradients for D
             self.compute_G_loss().backward()                   # calculate graidents for G
             if self.opt.lambda_NCE > 0.0:
-                self.optimizer_F = torch.optim.Adam(self.netF.parameters(), lr=self.opt.lr, betas=(self.opt.beta1, self.opt.beta2))
+                self.optimizer_F = torch.optim.Adam(self.netF_masked.parameters(), lr=self.opt.lr, betas=(self.opt.beta1, self.opt.beta2))
                 self.optimizers.append(self.optimizer_F)
 
     def optimize_parameters(self):
@@ -191,9 +192,10 @@ class CUTModel(BaseModel):
             self.loss_NCE_masked, self.loss_NCE = self.calculate_masked_NCE_loss(self.real_A, self.fake_B, mask=self.real_A_mask)
         else:
             self.loss_NCE_masked, self.loss_NCE = 0.0, 0.0
-
+        # print("loss_NCE_masked:", self.loss_NCE_masked, "loss_NCE:", self.loss_NCE)
         if self.opt.nce_idt and self.opt.lambda_NCE > 0.0:
             self.loss_NCE_Y_masked, self.loss_NCE_Y = self.calculate_masked_NCE_loss(self.real_B, self.idt_B, mask=self.real_B_mask)
+            # print("loss_NCE_Y_masked:", self.loss_NCE_Y_masked, "loss_NCE_Y:", self.loss_NCE_Y)
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.5 + (self.loss_NCE_masked + self.loss_NCE_Y_masked) * 0.5
         else:
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y_masked) * 0.5
@@ -221,17 +223,15 @@ class CUTModel(BaseModel):
 
     def calculate_masked_NCE_loss(self, src, tgt, mask=None):
         feat_q = self.netG(tgt, self.nce_layers, encode_only=True)
-
+        
         resized_masks = []
         for f_q in feat_q:
             _, _, h, w = f_q.shape
-            resized_mask = torch.nn.functional.interpolate(mask.float(), size=(h, w), mode='nearest')
+            resized_mask = torch.nn.functional.interpolate(mask.unsqueeze(1).float(), size=(h, w), mode='nearest')
             resized_masks.append(resized_mask)
-
+        
         feat_k = self.netG(src, self.nce_layers, encode_only=True)
 
-        # if self.opt.flip_equivariance and self.flipped_for_equivariance:
-        #     feat_q = [torch.flip(fq, [3]) for fq in feat_q]
 
         total_nce_loss = 0.0
         classes = torch.unique(mask) 
@@ -240,35 +240,38 @@ class CUTModel(BaseModel):
                 continue  # skip background
             total_nce_loss += self.calculate_single_NCE_loss(feat_q, feat_k, resized_masks, c.item())
 
+        avg_nce_loss = total_nce_loss / (len(classes) - 1) if len(classes) > 1 else total_nce_loss
+
         full_nce_loss = self.calculate_single_NCE_loss(feat_q, feat_k, resized_masks, class_idx=None)
 
-        return total_nce_loss / (len(classes) - 1), full_nce_loss
+
+        return avg_nce_loss, full_nce_loss
 
 
     def calculate_single_NCE_loss(self, feat_q, feat_k, reshaped_mask, class_idx=None):
         """Calculate NCE loss between src and tgt"""
 
         n_layers = len(self.nce_layers)
+        all_masks = []
 
         if class_idx is not None:
             for layer_idx in range(len(feat_q)):
-                mask_c = (reshaped_mask[layer_idx] == class_idx).float().unsqueeze(1)
-                if torch.sum(mask_c) < 10:
-                    print("Skipping class due to insufficient pixels.")
-                    continue
-                feat_q[layer_idx] = feat_q[layer_idx] * mask_c
-                feat_k[layer_idx] = feat_k[layer_idx] * mask_c
+                mask_c = (reshaped_mask[layer_idx] == class_idx).float()
+                all_masks.append(mask_c.squeeze(1))
 
 
+        
         if self.opt.flip_equivariance and self.flipped_for_equivariance:
             feat_q = [torch.flip(fq, [3]) for fq in feat_q]
 
-        feat_k_pool, sample_ids = self.netF(feat_k, self.opt.num_patches, None)
-        feat_q_pool, _ = self.netF(feat_q, self.opt.num_patches, sample_ids)
+        feat_k_pool, sample_ids = self.netF_masked(feats=feat_k, num_patches=self.opt.num_patches, 
+                                                   patch_ids=None, masks=all_masks if class_idx is not None else None)
+        feat_q_pool, _ = self.netF_masked(feats=feat_q, num_patches=self.opt.num_patches, 
+                                          patch_ids=sample_ids, masks=all_masks if class_idx is not None else None)
 
         total_nce_loss = 0.0
         for f_q, f_k, crit, nce_layer in zip(feat_q_pool, feat_k_pool, self.criterionNCE, self.nce_layers):
             loss = crit(f_q, f_k) * self.opt.lambda_NCE
             total_nce_loss += loss.mean()
-
+        # print("total_nce_loss single", class_idx, ":", total_nce_loss, "over", n_layers, "layers")
         return total_nce_loss / n_layers
