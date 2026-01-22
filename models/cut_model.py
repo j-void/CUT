@@ -72,8 +72,8 @@ class CUTModel(BaseModel):
             self.model_names = ['G']
 
         # define networks (both generator and discriminator)
-        opt.input_nc = 3
-        opt.output_nc = 2
+        # opt.input_nc = 3
+        # opt.output_nc = 2
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, opt.no_antialias_up, self.gpu_ids, opt)
         self.netF = networks.define_F(opt.input_nc, opt.netF, opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
         self.netF_masked = networks.define_F(opt.input_nc, "masked_sample", opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
@@ -156,8 +156,11 @@ class CUTModel(BaseModel):
             if self.flipped_for_equivariance:
                 self.real = torch.flip(self.real, [3])
 
-        self.fake_green_blue = self.netG(self.real)
-        self.fake = torch.cat([self.real[:,0:1,:,:], self.fake_green_blue], dim=1)   
+        ## Used when generating two-channel output
+        # self.fake_green_blue = self.netG(self.real)
+        # self.fake = torch.cat([self.real[:,0:1,:,:], self.fake_green_blue], dim=1)   
+
+        self.fake = self.netG(self.real)
 
         self.fake_B = self.fake[:self.real_A.size(0)]
         if self.opt.nce_idt:
