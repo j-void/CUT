@@ -4,6 +4,9 @@ from .base_model import BaseModel
 from . import networks
 from .patchnce import PatchNCELoss
 import util.util as util
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 class CUTModel(BaseModel):
@@ -283,3 +286,125 @@ class CUTModel(BaseModel):
             total_nce_loss += loss.mean()
         # print("total_nce_loss single", class_idx, ":", total_nce_loss, "over", n_layers, "layers")
         return total_nce_loss / n_layers
+
+
+class ColorLoss(nn.Module):
+    def __init__(
+        self,
+        patch_size=16,
+        num_bins=16,
+        sigma=0.05,
+        purity_thresh=0.6,
+        emb_dim=64
+    ):
+        super().__init__()
+
+        self.patch_size = patch_size
+        self.num_bins = num_bins
+        self.sigma = sigma
+        self.purity_thresh = purity_thresh
+
+        in_dim = 3 * num_bins
+        self.embedder = nn.Sequential(
+            nn.Linear(in_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, emb_dim)
+        )
+
+    # --------------------------------------------------
+
+    def extract_patches(self, x):
+        B, C, H, W = x.shape
+        p = self.patch_size
+        patches = x.unfold(2, p, p).unfold(3, p, p)
+        patches = patches.permute(0, 2, 3, 1, 4, 5)
+        return patches.reshape(B, -1, C, p, p)
+
+    def extract_mask_patches(self, mask):
+        B, H, W = mask.shape
+        p = self.patch_size
+        patches = mask.unfold(1, p, p).unfold(2, p, p)
+        return patches.reshape(B, -1, p, p)
+
+    # --------------------------------------------------
+
+    def soft_histogram(self, x):
+        """
+        x: (N,) values in [0,1]
+        """
+        centers = torch.linspace(0, 1, self.num_bins, device=x.device)
+        diff = x[:, None] - centers[None, :]
+        w = torch.exp(-0.5 * (diff / self.sigma) ** 2)
+        hist = w.sum(dim=0)
+        return hist / (hist.sum() + 1e-6)
+
+    # --------------------------------------------------
+
+    def forward(self, img, mask):
+        """
+        img:  (B, 3, H, W)
+        mask: (B, H, W)
+        """
+        img_patches = self.extract_patches(img)
+        mask_patches = self.extract_mask_patches(mask)
+
+        B, N, _, _, _ = img_patches.shape
+
+        all_embeddings = []
+        all_labels = []
+
+        for b in range(B):
+            for n in range(N):
+                patch = img_patches[b, n]
+                patch_mask = mask_patches[b, n]
+
+                # dominant class + purity
+                flat = patch_mask.view(-1)
+                dominant_class = flat.mode().values.item()
+                purity = (flat == dominant_class).float().mean()
+
+                if purity < self.purity_thresh:
+                    continue
+
+                # masked histogram
+                mask_c = (patch_mask == dominant_class)
+                if mask_c.sum() < 10:
+                    continue
+
+                hists = []
+                for c in range(3):
+                    pixels = patch[c][mask_c]
+                    hists.append(self.soft_histogram(pixels))
+
+                hist = torch.cat(hists, dim=0)  # (3*num_bins)
+                emb = self.embedder(hist.unsqueeze(0)).squeeze(0)
+
+                all_embeddings.append(emb)
+                all_labels.append(dominant_class)
+
+        if len(all_embeddings) < 2:
+            return torch.tensor(0.0, device=img.device, requires_grad=True)
+
+        embeddings = torch.stack(all_embeddings)
+        labels = torch.tensor(all_labels, device=img.device)
+
+        return info_nce_loss(embeddings, labels)
+    
+def info_nce_loss(embeddings, labels, temperature=0.1):
+    """
+    embeddings: (M, D)
+    labels:     (M,)
+    """
+    embeddings = F.normalize(embeddings, dim=1)
+    sim = embeddings @ embeddings.t() / temperature  # (M, M)
+
+    labels = labels.unsqueeze(1)
+    mask = labels.eq(labels.t()).float()
+
+    logits = sim - torch.max(sim, dim=1, keepdim=True)[0]
+    exp_logits = torch.exp(logits)
+
+    log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-6)
+    mean_log_prob_pos = (mask * log_prob).sum(dim=1) / (mask.sum(dim=1) + 1e-6)
+
+    return -mean_log_prob_pos.mean()
