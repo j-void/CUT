@@ -66,6 +66,8 @@ class CUTModel(BaseModel):
             self.loss_names += ['NCE_Y']
             self.visual_names += ['idt_B']
 
+        self.loss_names += ['red']
+
         if self.isTrain:
             self.model_names = ['G', 'F', 'D']
         else:  # during test time, only load G
@@ -83,6 +85,7 @@ class CUTModel(BaseModel):
 
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
+            self.criterionRed = torch.nn.MSELoss().to(self.device)
             self.criterionNCE = []
 
             for nce_layer in self.nce_layers:
@@ -203,7 +206,9 @@ class CUTModel(BaseModel):
         else:
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y_masked) * 0.5
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both
+        self.loss_red = self.criterionRed(self.fake_B[:, 0:1, :, :], self.real_A[:, 0:1, :, :]) * 0.4
+
+        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_red
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):
@@ -239,11 +244,11 @@ class CUTModel(BaseModel):
         total_nce_loss = 0.0
         classes = torch.unique(mask) 
         for c in classes:
-            if c == 0:
-                continue  # skip background
+            # if c == 0:
+            #     continue  # skip background
             total_nce_loss += self.calculate_single_NCE_loss(feat_q, feat_k, resized_masks, c.item())
 
-        avg_nce_loss = total_nce_loss / (len(classes) - 1) if len(classes) > 1 else total_nce_loss
+        avg_nce_loss = total_nce_loss / len(classes) # (len(classes) - 1) if len(classes) > 1 else total_nce_loss
 
         full_nce_loss = self.calculate_single_NCE_loss(feat_q, feat_k, resized_masks, class_idx=None)
 

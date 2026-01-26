@@ -83,6 +83,8 @@ def get_params(opt, size):
 def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True, is_mask=False):
     convert = False if is_mask else convert
     transform_list = []
+    ## do a crop at the center
+    transform_list.append(transforms.CenterCrop(420))
     if grayscale:
         transform_list.append(transforms.Grayscale(1))
     if 'fixsize' in opt.preprocess:
