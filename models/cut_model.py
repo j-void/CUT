@@ -206,7 +206,7 @@ class CUTModel(BaseModel):
         else:
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y_masked) * 0.5
 
-        self.loss_red = self.criterionRed(self.fake_B[:, 0:1, :, :], self.real_A[:, 0:1, :, :]) * 0.4
+        self.loss_red = self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.2
 
         self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_red
         return self.loss_G
