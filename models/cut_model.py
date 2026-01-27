@@ -86,6 +86,22 @@ class CUTModel(BaseModel):
         if self.isTrain:
             self.netD = networks.define_D(3, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
+
+            opt.color_num_bins = 16
+            opt.color_emb_dim = 64
+            self.color_embedder = nn.Sequential( ## Add this to optimizer too
+                nn.Linear(opt.color_num_bins * 3, 128),
+                nn.ReLU(),
+                nn.Linear(128, opt.color_emb_dim)
+            )
+
+            self.criterionColor = ColorLoss(
+                embedder=self.color_embedder,
+                patch_size=16,
+                num_bins=opt.color_num_bins,
+                emb_dim=opt.color_emb_dim
+            ).to(self.device)
+
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionRed = torch.nn.MSELoss().to(self.device)
@@ -291,6 +307,7 @@ class CUTModel(BaseModel):
 class ColorLoss(nn.Module):
     def __init__(
         self,
+        embedder,
         patch_size=16,
         num_bins=16,
         sigma=0.05,
@@ -305,11 +322,8 @@ class ColorLoss(nn.Module):
         self.purity_thresh = purity_thresh
 
         in_dim = 3 * num_bins
-        self.embedder = nn.Sequential(
-            nn.Linear(in_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, emb_dim)
-        )
+        self.embedder = embedder
+
 
     # --------------------------------------------------
 
