@@ -69,7 +69,7 @@ class CUTModel(BaseModel):
             self.loss_names += ['NCE_Y']
             self.visual_names += ['idt_B']
 
-        self.loss_names += ['red']
+        self.loss_names += ['red', 'color']
 
         if self.isTrain:
             self.model_names = ['G', 'F', 'D']
@@ -88,7 +88,7 @@ class CUTModel(BaseModel):
 
 
             opt.color_num_bins = 16
-            opt.color_emb_dim = 64
+            opt.color_emb_dim = 32
             self.color_embedder = nn.Sequential( ## Add this to optimizer too
                 nn.Linear(opt.color_num_bins * 3, 128),
                 nn.ReLU(),
@@ -97,7 +97,7 @@ class CUTModel(BaseModel):
 
             self.criterionColor = ColorLoss(
                 embedder=self.color_embedder,
-                patch_size=16,
+                patch_size=32,
                 num_bins=opt.color_num_bins,
                 emb_dim=opt.color_emb_dim
             ).to(self.device)
@@ -115,6 +115,9 @@ class CUTModel(BaseModel):
             self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
+
+            self.optimizer_C = torch.optim.Adam(self.color_embedder.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
+            self.optimizers.append(self.optimizer_C)
 
     def data_dependent_initialize(self, data):
         """
@@ -151,11 +154,14 @@ class CUTModel(BaseModel):
         self.optimizer_G.zero_grad()
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.zero_grad()
+        self.optimizer_C.zero_grad()
         self.loss_G = self.compute_G_loss()
         self.loss_G.backward()
         self.optimizer_G.step()
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.step()
+        torch.nn.utils.clip_grad_norm_(self.color_embedder.parameters(), max_norm=1.0)
+        self.optimizer_C.step()
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -225,9 +231,12 @@ class CUTModel(BaseModel):
         else:
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y_masked) * 0.5
 
-        self.loss_red = self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.2
+        self.loss_red = 0.0 # self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.1
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_red
+
+        self.loss_color = (self.criterionColor(self.fake_B, self.real_A_mask) + self.criterionColor(self.idt_B, self.real_B_mask) if self.opt.nce_idt else 0.0) * 1000.0
+
+        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_red + self.loss_color
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):
@@ -263,8 +272,8 @@ class CUTModel(BaseModel):
         total_nce_loss = 0.0
         classes = torch.unique(mask) 
         for c in classes:
-            # if c == 0:
-            #     continue  # skip background
+            if c == 0:
+                continue  # skip background
             total_nce_loss += self.calculate_single_NCE_loss(feat_q, feat_k, resized_masks, c.item())
 
         avg_nce_loss = total_nce_loss / len(classes) # (len(classes) - 1) if len(classes) > 1 else total_nce_loss
@@ -324,8 +333,32 @@ class ColorLoss(nn.Module):
         in_dim = 3 * num_bins
         self.embedder = embedder
 
+        # Memory bank - larger size for more diversity
+        self.register_buffer('centers', torch.randn(12, emb_dim))
+        self.alpha = 0.5
+
 
     # --------------------------------------------------
+
+    @torch.no_grad()
+    def update_memory(self, embeddings, labels):
+        """Update memory bank with new embeddings"""
+        batch_size = embeddings.shape[0]
+        ptr = int(self.memory_ptr)
+        
+        # Circular buffer
+        if ptr + batch_size <= self.memory_size:
+            self.memory_emb[ptr:ptr + batch_size] = embeddings
+            self.memory_labels[ptr:ptr + batch_size] = labels
+        else:
+            # Wrap around
+            remaining = self.memory_size - ptr
+            self.memory_emb[ptr:] = embeddings[:remaining]
+            self.memory_labels[ptr:] = labels[:remaining]
+            self.memory_emb[:batch_size - remaining] = embeddings[remaining:]
+            self.memory_labels[:batch_size - remaining] = labels[remaining:]
+        
+        self.memory_ptr[0] = (ptr + batch_size) % self.memory_size
 
     def extract_patches(self, x):
         B, C, H, W = x.shape
@@ -354,7 +387,7 @@ class ColorLoss(nn.Module):
 
     # --------------------------------------------------
 
-    def forward(self, img, mask):
+    def forward_old(self, img, mask):
         """
         img:  (B, 3, H, W)
         mask: (B, H, W)
@@ -400,9 +433,106 @@ class ColorLoss(nn.Module):
             return torch.tensor(0.0, device=img.device, requires_grad=True)
 
         embeddings = torch.stack(all_embeddings)
-        labels = torch.tensor(all_labels, device=img.device)
+        labels = torch.tensor(all_labels, device=img.device, dtype=torch.long)
+
+        unique_labels, counts = labels.unique(return_counts=True)
+        print(f"Unique classes: {len(unique_labels)}, Counts: {counts}")
 
         return info_nce_loss(embeddings, labels)
+    
+    def forward(self, img, mask):
+        """
+        img:  (B, 3, H, W)
+        mask: (B, H, W)
+        """
+        img_patches = self.extract_patches(img)
+        mask_patches = self.extract_mask_patches(mask)
+
+        B, N, _, p, _ = img_patches.shape
+
+        img_patches = img_patches.view(B*N, 3, p, p)
+        mask_patches = mask_patches.view(B*N, p, p)
+
+        flat = mask_patches.view(B*N, -1) # (BN, p*p)
+
+        num_classes = int(flat.max()) + 1
+        counts = torch.zeros(B*N, num_classes, device=flat.device)
+
+
+        counts.scatter_add_(
+            1,
+            flat,
+            torch.ones_like(flat, dtype=torch.float)
+            )
+
+
+        dominant = counts.argmax(dim=1) # (BN,)
+        purity = counts.max(dim=1).values / flat.shape[1] # (BN,)
+        valid = purity >= self.purity_thresh
+
+        mask_c = mask_patches == dominant[:, None, None] # (BN, p, p)
+        # valid &= mask_c.view(B*N, -1).sum(dim=1) >= 10
+
+        centers = torch.linspace(0, 1, self.num_bins, device=img.device)
+
+        hists = []
+        for c in range(3):
+            # Shape: (BN, p, p)
+            channel_patches = img_patches[:, c]
+            
+            # Apply mask and get variable-length pixels per patch
+            # We need to handle this carefully since each patch has different valid pixel counts
+            
+            # Expand to (BN, p*p) and mask
+            pixels_flat = channel_patches.view(B*N, -1)  # (BN, p*p)
+            mask_flat = mask_c.view(B*N, -1)  # (BN, p*p)
+            
+            # Set invalid pixels to 0 (won't contribute due to masking in histogram)
+            pixels_masked = pixels_flat * mask_flat
+            
+            # Compute histogram with proper masking
+            diff = pixels_masked[..., None] - centers  # (BN, p*p, num_bins)
+            w = torch.exp(-0.5 * (diff / self.sigma) ** 2)
+            
+            # Only sum over valid pixels
+            w = w * mask_flat[..., None]  # Zero out invalid positions
+            
+            hist = w.sum(dim=1)  # (BN, num_bins)
+            hist = hist / (hist.sum(dim=1, keepdim=True) + 1e-6)
+            hists.append(hist)
+
+        hist = torch.cat(hists, dim=1)  # (BN, 3*num_bins)
+        hist = hist[valid]
+        labels = dominant[valid]
+
+        num_valid = hist.shape[0]
+
+        # # In forward_new, before returning loss:
+        # unique_labels, counts = labels.unique(return_counts=True)
+        # print(f"Valid patches: {num_valid}, Unique classes: {len(unique_labels)}, Counts: {counts}")
+
+        # if num_valid < 2:
+        #     return torch.tensor(0.0, device=img.device, requires_grad=True)
+
+        embeddings = self.embedder(hist)
+
+        # Get centers for each sample's class
+        centers_batch = self.centers[labels]
+        
+        # Pull embeddings toward their class center
+        loss = (embeddings - centers_batch).pow(2).sum(dim=1).mean()
+        
+        # Update centers (moving average)
+        with torch.no_grad():
+            for c in labels.unique():
+                mask_c = labels == c
+                if mask_c.sum() > 0:
+                    center_new = embeddings[mask_c].mean(dim=0)
+                    self.centers[c] = (1 - self.alpha) * self.centers[c] + self.alpha * center_new
+        
+        return loss
+
+
     
 def info_nce_loss(embeddings, labels, temperature=0.1):
     """
@@ -413,12 +543,40 @@ def info_nce_loss(embeddings, labels, temperature=0.1):
     sim = embeddings @ embeddings.t() / temperature  # (M, M)
 
     labels = labels.unsqueeze(1)
-    mask = labels.eq(labels.t()).float()
-
-    logits = sim - torch.max(sim, dim=1, keepdim=True)[0]
-    exp_logits = torch.exp(logits)
-
-    log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-6)
-    mean_log_prob_pos = (mask * log_prob).sum(dim=1) / (mask.sum(dim=1) + 1e-6)
-
+    mask_pos = labels.eq(labels.t()).float()
+    
+    # Exclude diagonal from positive pairs
+    eye = torch.eye(len(labels), device=labels.device)
+    mask_pos = mask_pos * (1 - eye)
+    
+    # ============ CRITICAL FIX ============
+    # Only keep samples that have at least one positive pair
+    has_positive = mask_pos.sum(dim=1) > 0
+    
+    if has_positive.sum() < 2:
+        # Not enough samples with positives
+        return torch.tensor(0.0, device=embeddings.device, requires_grad=True)
+    
+    # Filter to only samples with positives
+    embeddings = embeddings[has_positive]
+    labels = labels[has_positive]
+    sim = sim[has_positive][:, has_positive]
+    mask_pos = mask_pos[has_positive][:, has_positive]
+    eye = torch.eye(len(embeddings), device=embeddings.device)
+    # ======================================
+    
+    # Negative mask (everything except positives and diagonal)
+    mask_neg = 1 - labels.eq(labels.t()).float()
+    
+    # For numerical stability
+    logits_max = torch.max(sim * (mask_neg + eye), dim=1, keepdim=True)[0]
+    logits = sim - logits_max.detach()
+    
+    # Compute log prob
+    exp_logits = torch.exp(logits) * (1 - eye)
+    log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-8)
+    
+    # Average over positive pairs
+    mean_log_prob_pos = (mask_pos * log_prob).sum(dim=1) / (mask_pos.sum(dim=1) + 1e-8)
+    
     return -mean_log_prob_pos.mean()
