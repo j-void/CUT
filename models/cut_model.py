@@ -69,7 +69,12 @@ class CUTModel(BaseModel):
             self.loss_names += ['NCE_Y']
             self.visual_names += ['idt_B']
 
-        self.loss_names += ['red', 'color']
+        self.loss_names += ['edge'] #['red', 'color']
+        self.visual_names += ['edge_gen', 'edge_gt']
+
+        ## set default loss weights
+        for name in self.loss_names:
+            setattr(self, 'lambda_' + name, 1.0)
 
         if self.isTrain:
             self.model_names = ['G', 'F', 'D']
@@ -87,20 +92,22 @@ class CUTModel(BaseModel):
             self.netD = networks.define_D(3, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
 
-            opt.color_num_bins = 16
-            opt.color_emb_dim = 32
-            self.color_embedder = nn.Sequential( ## Add this to optimizer too
-                nn.Linear(opt.color_num_bins * 3, 128),
-                nn.ReLU(),
-                nn.Linear(128, opt.color_emb_dim)
-            )
+            # opt.color_num_bins = 16
+            # opt.color_emb_dim = 32
+            # self.color_embedder = nn.Sequential( ## Add this to optimizer too
+            #     nn.Linear(opt.color_num_bins * 3, 128),
+            #     nn.ReLU(),
+            #     nn.Linear(128, opt.color_emb_dim)
+            # )
 
-            self.criterionColor = ColorLoss(
-                embedder=self.color_embedder,
-                patch_size=32,
-                num_bins=opt.color_num_bins,
-                emb_dim=opt.color_emb_dim
-            ).to(self.device)
+            # self.criterionColor = ColorLoss(
+            #     embedder=self.color_embedder,
+            #     patch_size=32,
+            #     num_bins=opt.color_num_bins,
+            #     emb_dim=opt.color_emb_dim
+            # ).to(self.device)
+
+            self.criterionEdge = EdgeLoss(alpha=0.99).to(self.device)
 
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
@@ -116,8 +123,8 @@ class CUTModel(BaseModel):
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
 
-            self.optimizer_C = torch.optim.Adam(self.color_embedder.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
-            self.optimizers.append(self.optimizer_C)
+            # self.optimizer_C = torch.optim.Adam(self.color_embedder.parameters(), lr=opt.lr, betas=(opt.beta1, opt.beta2))
+            # self.optimizers.append(self.optimizer_C)
 
     def data_dependent_initialize(self, data):
         """
@@ -154,14 +161,13 @@ class CUTModel(BaseModel):
         self.optimizer_G.zero_grad()
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.zero_grad()
-        self.optimizer_C.zero_grad()
+        # self.optimizer_C.zero_grad()
         self.loss_G = self.compute_G_loss()
         self.loss_G.backward()
         self.optimizer_G.step()
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.step()
-        torch.nn.utils.clip_grad_norm_(self.color_embedder.parameters(), max_norm=1.0)
-        self.optimizer_C.step()
+        # self.optimizer_C.step()
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -175,6 +181,13 @@ class CUTModel(BaseModel):
         self.real_A_mask = input['A_mask' if AtoB else 'B_mask'].to(self.device)
         self.real_B_mask = input['B_mask' if AtoB else 'A_mask'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
+
+    def set_loss_weights(self, lambdas):
+        for name, value in lambdas.items():
+            if name in self.loss_names:
+                setattr(self, 'lambda_' + name, value)
+
+        
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
@@ -234,9 +247,11 @@ class CUTModel(BaseModel):
         self.loss_red = 0.0 # self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.1
 
 
-        self.loss_color = (self.criterionColor(self.fake_B, self.real_A_mask) + self.criterionColor(self.idt_B, self.real_B_mask) if self.opt.nce_idt else 0.0) * 1000.0
+        #self.loss_color = (self.criterionColor(self.fake_B, self.real_A_mask) + self.criterionColor(self.idt_B, self.real_B_mask) if self.opt.nce_idt else 0.0) * 1.0
+        self.loss_edge, self.edge_gen, self.edge_gt = self.criterionEdge(self.real_A, self.real_A_mask, self.fake_B)
+                                                
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_red + self.loss_color
+        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_red + self.loss_edge * self.lambda_edge
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):
@@ -272,8 +287,8 @@ class CUTModel(BaseModel):
         total_nce_loss = 0.0
         classes = torch.unique(mask) 
         for c in classes:
-            if c == 0:
-                continue  # skip background
+            # if c == 0:
+            #     continue  # skip background
             total_nce_loss += self.calculate_single_NCE_loss(feat_q, feat_k, resized_masks, c.item())
 
         avg_nce_loss = total_nce_loss / len(classes) # (len(classes) - 1) if len(classes) > 1 else total_nce_loss
@@ -320,7 +335,7 @@ class ColorLoss(nn.Module):
         patch_size=16,
         num_bins=16,
         sigma=0.05,
-        purity_thresh=0.6,
+        purity_thresh=0.5,
         emb_dim=64
     ):
         super().__init__()
@@ -334,31 +349,11 @@ class ColorLoss(nn.Module):
         self.embedder = embedder
 
         # Memory bank - larger size for more diversity
-        self.register_buffer('centers', torch.randn(12, emb_dim))
         self.alpha = 0.5
+        self.margin = 0.5
 
 
     # --------------------------------------------------
-
-    @torch.no_grad()
-    def update_memory(self, embeddings, labels):
-        """Update memory bank with new embeddings"""
-        batch_size = embeddings.shape[0]
-        ptr = int(self.memory_ptr)
-        
-        # Circular buffer
-        if ptr + batch_size <= self.memory_size:
-            self.memory_emb[ptr:ptr + batch_size] = embeddings
-            self.memory_labels[ptr:ptr + batch_size] = labels
-        else:
-            # Wrap around
-            remaining = self.memory_size - ptr
-            self.memory_emb[ptr:] = embeddings[:remaining]
-            self.memory_labels[ptr:] = labels[:remaining]
-            self.memory_emb[:batch_size - remaining] = embeddings[remaining:]
-            self.memory_labels[:batch_size - remaining] = labels[remaining:]
-        
-        self.memory_ptr[0] = (ptr + batch_size) % self.memory_size
 
     def extract_patches(self, x):
         B, C, H, W = x.shape
@@ -511,26 +506,26 @@ class ColorLoss(nn.Module):
         # unique_labels, counts = labels.unique(return_counts=True)
         # print(f"Valid patches: {num_valid}, Unique classes: {len(unique_labels)}, Counts: {counts}")
 
-        # if num_valid < 2:
-        #     return torch.tensor(0.0, device=img.device, requires_grad=True)
-
-        embeddings = self.embedder(hist)
-
-        # Get centers for each sample's class
-        centers_batch = self.centers[labels]
+        loss = 0
+        count = 0
         
-        # Pull embeddings toward their class center
-        loss = (embeddings - centers_batch).pow(2).sum(dim=1).mean()
+        # For each class, enforce histogram consistency
+        for c in labels.unique():
+            mask_c = labels == c
+            if mask_c.sum() < 2:
+                continue
+            
+            # Get all histograms for this class
+            hists_c = hist[mask_c]  # (N_c, num_bins*3)
+            
+            # Mean histogram for this class
+            mean_hist = hists_c.mean(dim=0, keepdim=True)
+            
+            # Push all toward mean (reduce intra-class variance)
+            loss += F.mse_loss(hists_c, mean_hist.expand_as(hists_c))
+            count += 1
         
-        # Update centers (moving average)
-        with torch.no_grad():
-            for c in labels.unique():
-                mask_c = labels == c
-                if mask_c.sum() > 0:
-                    center_new = embeddings[mask_c].mean(dim=0)
-                    self.centers[c] = (1 - self.alpha) * self.centers[c] + self.alpha * center_new
-        
-        return loss
+        return loss / max(count, 1)
 
 
     
@@ -580,3 +575,72 @@ def info_nce_loss(embeddings, labels, temperature=0.1):
     mean_log_prob_pos = (mask_pos * log_prob).sum(dim=1) / (mask_pos.sum(dim=1) + 1e-8)
     
     return -mean_log_prob_pos.mean()
+
+
+
+
+class EdgeLoss(nn.Module):
+    def __init__(self, alpha=0.99):
+        super(EdgeLoss, self).__init__()
+        kx = torch.tensor([[ 3., 0., -3.],
+                            [10., 0.,-10.],
+                            [ 3., 0., -3.]], dtype=torch.float32)
+        ky = torch.tensor([[ 3., 10., 3.],
+                            [ 0., 0., 0.],
+                            [-3.,-10., -3.]], dtype=torch.float32)
+
+        self.register_buffer('filter_x', kx.view(1,1,3,3))
+        self.register_buffer('filter_y', ky.view(1,1,3,3))
+
+        self.alpha = alpha
+    
+    def edge_from_red(self, R):
+        gx = F.conv2d(R, self.filter_x, padding=1)
+        gy = F.conv2d(R, self.filter_y, padding=1)
+        return torch.sqrt(gx**2 + gy**2 + 1e-6)
+    
+    def edge_from_segmentation(self, seg):
+        if seg.dim() == 3:
+            seg = seg.unsqueeze(1)  # (B,1,H,W)
+        seg = seg.float()
+        dx = torch.abs(seg[:, :, :, 1:] - seg[:, :, :, :-1])
+        dy = torch.abs(seg[:, :, 1:, :] - seg[:, :, :-1, :])
+        edge = torch.zeros_like(seg)
+        edge[:, :, :, 1:] += dx
+        edge[:, :, 1:, :] += dy
+        edge = (edge > 0).float()
+        return edge
+    
+    def combine_edges(self, E_seg, E_red, alpha=0.999):
+        return alpha * E_seg + (1 - alpha) * E_red
+    
+    def color_edge_from_rgb(self, rgb):
+        R = rgb[:, 0:1]
+        G = rgb[:, 1:2]
+        B = rgb[:, 2:3]
+        C1 = G - R
+        C2 = B - R
+        gx1 = F.conv2d(C1, self.filter_x, padding=1)
+        gy1 = F.conv2d(C1, self.filter_y, padding=1)
+        gx2 = F.conv2d(C2, self.filter_x, padding=1)
+        gy2 = F.conv2d(C2, self.filter_y, padding=1)
+        edge = torch.sqrt(gx1**2 + gy1**2 + gx2**2 + gy2**2 + 1e-6)
+        return edge
+
+    def forward(self, x, seg, gen):
+
+        E_red = self.edge_from_red(x[:, 0:1])
+        E_seg = self.edge_from_segmentation(seg)  
+        E_gt = self.combine_edges(E_seg, E_red, alpha=self.alpha)
+
+        E_gen = self.color_edge_from_rgb(gen)      
+
+        #return torch.mean(E_gt * (1.0 - torch.tanh(E_gen))) # F.l1_loss(E_gen, E_gt)
+    
+        loss_pos = torch.mean(E_gt * torch.abs(E_gen - E_gt))
+        loss_neg = torch.mean((1.0 - E_gt) * E_gen)
+
+        return loss_pos + 0.1 * loss_neg, E_gen, E_gt
+
+
+
