@@ -69,8 +69,8 @@ class CUTModel(BaseModel):
             self.loss_names += ['NCE_Y']
             self.visual_names += ['idt_B']
 
-        self.loss_names += ['edge'] #['red', 'color']
-        self.visual_names += ['edge_gen', 'edge_gt']
+        #self.loss_names += ['edge'] #['red', 'color']
+        #self.visual_names += ['edge_gen', 'edge_gt']
 
         ## set default loss weights
         for name in self.loss_names:
@@ -81,6 +81,8 @@ class CUTModel(BaseModel):
         else:  # during test time, only load G
             self.model_names = ['G']
 
+
+        self.opt.num_classes = 12 # set number of classes for segmentation mask
         # define networks (both generator and discriminator)
         # opt.input_nc = 3
         # opt.output_nc = 2
@@ -89,7 +91,7 @@ class CUTModel(BaseModel):
         self.netF_masked = networks.define_F(opt.input_nc, "masked_sample", opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
         if self.isTrain:
-            self.netD = networks.define_D(3, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
+            self.netD = networks.define_D(3+self.opt.num_classes, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
 
             # opt.color_num_bins = 16
@@ -181,6 +183,8 @@ class CUTModel(BaseModel):
         self.real_A_mask = input['A_mask' if AtoB else 'B_mask'].to(self.device)
         self.real_B_mask = input['B_mask' if AtoB else 'A_mask'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
+        self.real_A_mask_onehot = F.one_hot(self.real_A_mask.long(), num_classes=self.opt.num_classes).permute(0, 3, 1, 2).float()
+        self.real_B_mask_onehot = F.one_hot(self.real_B_mask.long(), num_classes=self.opt.num_classes).permute(0, 3, 1, 2).float()
 
     def set_loss_weights(self, lambdas):
         for name, value in lambdas.items():
@@ -211,10 +215,10 @@ class CUTModel(BaseModel):
         """Calculate GAN loss for the discriminator"""
         fake = self.fake_B.detach()
         # Fake; stop backprop to the generator by detaching fake_B
-        pred_fake = self.netD(fake)
+        pred_fake = self.netD(torch.cat([fake, self.real_A_mask_onehot], dim=1))
         self.loss_D_fake = self.criterionGAN(pred_fake, False).mean()
         # Real
-        self.pred_real = self.netD(self.real_B)
+        self.pred_real = self.netD(torch.cat([self.real_B, self.real_B_mask_onehot], dim=1))
         loss_D_real = self.criterionGAN(self.pred_real, True)
         self.loss_D_real = loss_D_real.mean()
 
@@ -227,7 +231,7 @@ class CUTModel(BaseModel):
         fake = self.fake_B
         # First, G(A) should fake the discriminator
         if self.opt.lambda_GAN > 0.0:
-            pred_fake = self.netD(fake)
+            pred_fake = self.netD(torch.cat([fake, self.real_A_mask_onehot], dim=1))
             self.loss_G_GAN = self.criterionGAN(pred_fake, True).mean() * self.opt.lambda_GAN
         else:
             self.loss_G_GAN = 0.0
@@ -248,10 +252,10 @@ class CUTModel(BaseModel):
 
 
         #self.loss_color = (self.criterionColor(self.fake_B, self.real_A_mask) + self.criterionColor(self.idt_B, self.real_B_mask) if self.opt.nce_idt else 0.0) * 1.0
-        self.loss_edge, self.edge_gen, self.edge_gt = self.criterionEdge(self.real_A, self.real_A_mask, self.fake_B)
+        #self.loss_edge, self.edge_gen, self.edge_gt = self.criterionEdge(self.real_A, self.real_A_mask, self.fake_B)
                                                 
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_red + self.loss_edge * self.lambda_edge
+        self.loss_G = self.loss_G_GAN + loss_NCE_both #+ self.loss_red + self.loss_edge * self.lambda_edge
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):

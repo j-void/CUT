@@ -21,7 +21,7 @@ if __name__ == '__main__':
     optimize_time = 0.1
 
     ## set initial loss weights
-    model.set_loss_weights({"edge": 1.0})
+    # model.set_loss_weights({"edge": 1.0})
 
     times = []
     for epoch in range(opt.epoch_count, opt.n_epochs + opt.n_epochs_decay + 1):    # outer loop for different epochs; we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>
@@ -30,8 +30,8 @@ if __name__ == '__main__':
         epoch_iter = 0                  # the number of training iterations in current epoch, reset to 0 every epoch
         visualizer.reset()   
         
-        if model.lambda_edge < 10.0 and epoch > 1:
-            model.set_loss_weights({"edge": model.lambda_edge + 1.0}) 
+        # if model.lambda_edge < 10.0 and epoch > 1:
+        #     model.set_loss_weights({"edge": model.lambda_edge + 1.0}) 
 
         dataset.set_epoch(epoch)
         for i, data in enumerate(dataset):  # inner loop within one epoch
