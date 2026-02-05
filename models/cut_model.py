@@ -196,16 +196,20 @@ class CUTModel(BaseModel):
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
         self.real = torch.cat((self.real_A, self.real_B), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A
+        self.real_mask_onehot = torch.cat((self.real_A_mask_onehot, self.real_B_mask_onehot), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A_mask_onehot
+        #self.real = torch.cat([self.real, self.real_mask_onehot], dim=1)
+        
         if self.opt.flip_equivariance:
             self.flipped_for_equivariance = self.opt.isTrain and (np.random.random() < 0.5)
             if self.flipped_for_equivariance:
                 self.real = torch.flip(self.real, [3])
+                self.real_mask_onehot = torch.flip(self.real_mask_onehot, [3])
 
         ## Used when generating two-channel output
         # self.fake_green_blue = self.netG(self.real)
         # self.fake = torch.cat([self.real[:,0:1,:,:], self.fake_green_blue], dim=1)   
 
-        self.fake = self.netG(self.real)
+        self.fake = self.netG(self.real, self.real_mask_onehot)
 
         self.fake_B = self.fake[:self.real_A.size(0)]
         if self.opt.nce_idt:
@@ -237,14 +241,14 @@ class CUTModel(BaseModel):
             self.loss_G_GAN = 0.0
 
         if self.opt.lambda_NCE > 0.0:
-            self.loss_NCE_masked, self.loss_NCE = self.calculate_masked_NCE_loss(self.real_A, self.fake_B, mask=self.real_A_mask)
+            self.loss_NCE_masked, self.loss_NCE = self.calculate_masked_NCE_loss(self.real_A, self.fake_B, mask=self.real_A_mask, mask_onehot=self.real_A_mask_onehot)
         else:
             self.loss_NCE_masked, self.loss_NCE = 0.0, 0.0
         # print("loss_NCE_masked:", self.loss_NCE_masked, "loss_NCE:", self.loss_NCE)
         if self.opt.nce_idt and self.opt.lambda_NCE > 0.0:
-            self.loss_NCE_Y_masked, self.loss_NCE_Y = self.calculate_masked_NCE_loss(self.real_B, self.idt_B, mask=self.real_B_mask)
+            self.loss_NCE_Y_masked, self.loss_NCE_Y = self.calculate_masked_NCE_loss(self.real_B, self.idt_B, mask=self.real_B_mask, mask_onehot=self.real_B_mask_onehot)
             # print("loss_NCE_Y_masked:", self.loss_NCE_Y_masked, "loss_NCE_Y:", self.loss_NCE_Y)
-            loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.5 + (self.loss_NCE_masked + self.loss_NCE_Y_masked) * 0.5
+            loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.25 + (self.loss_NCE_masked + self.loss_NCE_Y_masked) * 0.25
         else:
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y_masked) * 0.5
 
@@ -276,8 +280,8 @@ class CUTModel(BaseModel):
 
         return total_nce_loss / n_layers
 
-    def calculate_masked_NCE_loss(self, src, tgt, mask=None):
-        feat_q = self.netG(tgt, self.nce_layers, encode_only=True)
+    def calculate_masked_NCE_loss(self, src, tgt, mask=None, mask_onehot=None):
+        feat_q = self.netG(tgt, mask_onehot, self.nce_layers, encode_only=True)
         
         resized_masks = []
         for f_q in feat_q:
@@ -285,7 +289,7 @@ class CUTModel(BaseModel):
             resized_mask = torch.nn.functional.interpolate(mask.unsqueeze(1).float(), size=(h, w), mode='nearest')
             resized_masks.append(resized_mask)
         
-        feat_k = self.netG(src, self.nce_layers, encode_only=True)
+        feat_k = self.netG(src, mask_onehot, self.nce_layers, encode_only=True)
 
 
         total_nce_loss = 0.0

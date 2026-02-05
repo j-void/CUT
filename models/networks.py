@@ -263,6 +263,9 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     elif netG == 'resnet_cat':
         n_blocks = 8
         net = G_Resnet(input_nc, output_nc, opt.nz, num_downs=2, n_res=n_blocks - 4, ngf=ngf, norm='inst', nl_layer='relu')
+    elif netG == 'resnet_seg':
+        n_blocks = 9
+        net = S_Resnet(input_nc, output_nc, num_downs=2, n_res=n_blocks - 4, ngf=ngf, norm='inst', nl_layer='relu', num_classes=opt.num_classes)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids, initialize_weights=('stylegan2' not in netG))
@@ -737,9 +740,94 @@ class G_Resnet(nn.Module):
             else:
                 return images_recon
 
+
+class S_Resnet(nn.Module):
+    def __init__(self, input_nc, output_nc, num_downs, n_res, num_classes, ngf=64,
+                 norm=None, nl_layer=None):
+        super(S_Resnet, self).__init__()
+        n_downsample = num_downs
+        pad_type = 'reflect'
+        self.enc_content = ContentEncoder(n_downsample, n_res, input_nc, ngf, norm, nl_layer, pad_type=pad_type)
+        self.dec = S_Decoder(n_downsample, n_res, self.enc_content.output_dim, output_nc, norm=norm, activ=nl_layer, pad_type=pad_type, nz=0)
+
+        self.seg_fuser_bottleneck = nn.Conv2d(self.enc_content.output_dim + num_classes,
+                                              self.enc_content.output_dim,
+                                              kernel_size=3, padding=1)
+        # For decoder-level fusion, use small convs per decoder block if desired
+        self.seg_fuser_decoder = nn.ModuleList([
+            nn.Conv2d(dec_in_ch + num_classes, dec_in_ch, kernel_size=3, padding=1)
+            for dec_in_ch in self.dec.in_channels_list
+        ])
+
+    def decode(self, content, seg_onehot):
+        seg_b = F.interpolate(seg_onehot, size=content.shape[2:], mode='nearest')
+        b = torch.cat([content, seg_b], dim=1)
+        b = self.seg_fuser_bottleneck(b)
+
+        d = b
+        for i, block in enumerate(self.dec.blocks):
+            seg_d = F.interpolate(seg_onehot, size=d.shape[2:], mode='nearest')
+            d = torch.cat([d, seg_d], dim=1)
+            d = self.seg_fuser_decoder[i](d)
+            d = block(d)
+
+        return d
+
+    def forward(self, image, seg, nce_layers=[], encode_only=False):
+        content, feats = self.enc_content(image, nce_layers=nce_layers, encode_only=encode_only)
+        if encode_only:
+            return feats
+        else:
+            images_recon = self.decode(content, seg)
+            if len(nce_layers) > 0:
+                return images_recon, feats
+            else:
+                return images_recon
+
 ##################################################################################
 # Encoder and Decoders
 ##################################################################################
+
+# --- Fixed S_Decoder: expose logical blocks (ModuleList) ---
+class S_Decoder(nn.Module):
+    def __init__(self, n_upsample, n_res, dim, output_dim, norm='batch', activ='relu', pad_type='zero', nz=0):
+        super(S_Decoder, self).__init__()
+
+        blocks = []
+        self.in_channels_list = []
+
+        # 1) ResBlocks as first logical block
+        blocks.append(ResBlocks(n_res, dim, norm, activ, pad_type=pad_type, nz=nz))
+        self.in_channels_list.append(dim)
+
+        # 2) For each upsample: make a single Sequential block (Upsample + Conv block)
+        for i in range(n_upsample):
+            if i == 0:
+                input_dim = dim + nz
+            else:
+                input_dim = dim
+            
+            self.in_channels_list.append(input_dim)
+            up_block = nn.Sequential(
+                Upsample2(scale_factor=2),
+                Conv2dBlock(input_dim, dim // 2, 5, 1, 2, norm='ln', activation=activ, pad_type='reflect')
+            )
+            blocks.append(up_block)
+            dim = dim // 2
+
+        # 3) Final conv as last logical block
+        final_block = Conv2dBlock(dim, output_dim, 7, 1, 3, norm='none', activation='tanh', pad_type='reflect')
+        blocks.append(final_block)
+        self.in_channels_list.append(dim)
+
+        # store as ModuleList so blocks align 1:1 with in_channels_list
+        self.blocks = nn.ModuleList(blocks)
+
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
+
 
 
 class E_adaIN(nn.Module):
