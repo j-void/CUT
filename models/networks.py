@@ -846,7 +846,7 @@ class S_Decoder(nn.Module):
         self.in_channels_list = []
 
         # 1) ResBlocks as first logical block
-        blocks.append(ResBlocks(n_res, dim, norm, activ, pad_type=pad_type, nz=nz, num_classes=num_classes))
+        blocks.append(ResBlocks(n_res, dim, norm, activ, pad_type=pad_type, nz=nz))
         self.in_channels_list.append(dim)
 
         # 2) For each upsample: make a single Sequential block (Upsample + Conv block)
@@ -859,13 +859,13 @@ class S_Decoder(nn.Module):
             self.in_channels_list.append(input_dim)
             up_block = nn.Sequential(
                 Upsample2(scale_factor=2),
-                Conv2dBlock(input_dim, dim // 2, 5, 1, 2, norm='ln', activation=activ, pad_type='reflect', num_classes=num_classes)
+                Conv2dBlock(input_dim, dim // 2, 5, 1, 2, norm='ln', activation=activ, pad_type='reflect')
             )
             blocks.append(up_block)
             dim = dim // 2
 
         # 3) Final conv as last logical block
-        final_block = Conv2dBlock(dim, output_dim, 7, 1, 3, norm='none', activation='tanh', pad_type='reflect', num_classes=num_classes)
+        final_block = Conv2dBlock(dim, output_dim, 7, 1, 3, norm='none', activation='tanh', pad_type='reflect')
         blocks.append(final_block)
         self.in_channels_list.append(dim)
 
@@ -1069,7 +1069,7 @@ class Decoder(nn.Module):
 
 
 class ResBlocks(nn.Module):
-    def __init__(self, num_blocks, dim, norm='inst', activation='relu', pad_type='zero', nz=0, num_classes=None):
+    def __init__(self, num_blocks, dim, norm='inst', activation='relu', pad_type='zero', nz=0):
         super(ResBlocks, self).__init__()
         self.model = []
         for i in range(num_blocks):
