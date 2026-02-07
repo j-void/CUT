@@ -69,7 +69,7 @@ class CUTModel(BaseModel):
             self.loss_names += ['NCE_Y']
             self.visual_names += ['idt_B']
 
-        self.loss_names += ['red'] #['red', 'color']
+        #self.loss_names += ['red'] #['red', 'color']
         #self.visual_names += ['edge_gen', 'edge_gt']
 
         ## set default loss weights
@@ -195,6 +195,11 @@ class CUTModel(BaseModel):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
+
+        if self.opt.isTrain and torch.rand(1).item() < 0.3: ## add some reguralization
+            self.real_A_mask_onehot = torch.zeros_like(self.real_A_mask_onehot).to(self.real_A_mask_onehot.device)
+            self.real_B_mask_onehot = torch.zeros_like(self.real_B_mask_onehot).to(self.real_B_mask_onehot.device)
+
         self.real = torch.cat((self.real_A, self.real_B), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A
         self.real_mask_onehot = torch.cat((self.real_A_mask_onehot, self.real_B_mask_onehot), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A_mask_onehot
         #self.real = torch.cat([self.real, self.real_mask_onehot], dim=1)
@@ -252,14 +257,14 @@ class CUTModel(BaseModel):
         else:
             loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y_masked) * 0.5
 
-        self.loss_red = self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.1
+        #self.loss_red = self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.1
 
 
         #self.loss_color = (self.criterionColor(self.fake_B, self.real_A_mask) + self.criterionColor(self.idt_B, self.real_B_mask) if self.opt.nce_idt else 0.0) * 1.0
         #self.loss_edge, self.edge_gen, self.edge_gt = self.criterionEdge(self.real_A, self.real_A_mask, self.fake_B)
                                                 
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_red #+ self.loss_edge * self.lambda_edge
+        self.loss_G = self.loss_G_GAN + loss_NCE_both #+ self.loss_red #+ self.loss_edge * self.lambda_edge
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):
