@@ -140,7 +140,6 @@ if __name__ == '__main__':
         metrics_vals['MS-SSIM'].append(ms_ssim_value)
         metrics_vals['PSNR'].append(psnr_value)
         metrics_vals['LPIPS'].append(lpips_value)
-
         img_path = model.get_image_paths()     # get image paths
         result = torch.cat([v[0] for v in visuals.values()], 2)
         path = os.path.join(opt.results_dir, opt.name + '_results', 'test',
