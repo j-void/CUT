@@ -743,7 +743,7 @@ class G_Resnet(nn.Module):
 
 class S_Resnet(nn.Module):
     def __init__(self, input_nc, output_nc, num_downs, n_res, num_classes, ngf=64,
-                 norm=None, nl_layer=None):
+                 norm=None, nl_layer=None, seg_layers=None):
         super(S_Resnet, self).__init__()
         n_downsample = num_downs
         pad_type = 'reflect'
@@ -759,6 +759,8 @@ class S_Resnet(nn.Module):
             for dec_in_ch in self.dec.in_channels_list
         ])
 
+        self.seg_layers = 3 #seg_layers if seg_layers is not None else list(range(len(self.dec.blocks)))
+
     def decode(self, content, seg_onehot):
         seg_b = F.interpolate(seg_onehot, size=content.shape[2:], mode='nearest')
         b = torch.cat([content, seg_b], dim=1)
@@ -766,9 +768,10 @@ class S_Resnet(nn.Module):
 
         d = b
         for i, block in enumerate(self.dec.blocks):
-            seg_d = F.interpolate(seg_onehot, size=d.shape[2:], mode='nearest')
-            d = torch.cat([d, seg_d], dim=1)
-            d = self.seg_fuser_decoder[i](d)
+            if  True: #i < self.seg_layers:
+                seg_d = F.interpolate(seg_onehot, size=d.shape[2:], mode='nearest')
+                d = torch.cat([d, seg_d], dim=1)
+                d = self.seg_fuser_decoder[i](d)
             d = block(d)
 
         return d

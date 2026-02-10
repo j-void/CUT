@@ -196,9 +196,9 @@ class CUTModel(BaseModel):
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
 
-        if self.opt.isTrain and torch.rand(1).item() < 0.3: ## add some reguralization
-            self.real_A_mask_onehot = torch.zeros_like(self.real_A_mask_onehot).to(self.real_A_mask_onehot.device)
-            self.real_B_mask_onehot = torch.zeros_like(self.real_B_mask_onehot).to(self.real_B_mask_onehot.device)
+        # if self.opt.isTrain and torch.rand(1).item() < 0.3: ## add some reguralization
+        #     self.real_A_mask_onehot = torch.zeros_like(self.real_A_mask_onehot).to(self.real_A_mask_onehot.device)
+        #     self.real_B_mask_onehot = torch.zeros_like(self.real_B_mask_onehot).to(self.real_B_mask_onehot.device)
 
         self.real = torch.cat((self.real_A, self.real_B), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A
         self.real_mask_onehot = torch.cat((self.real_A_mask_onehot, self.real_B_mask_onehot), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A_mask_onehot
