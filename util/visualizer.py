@@ -7,7 +7,8 @@ from pathlib import Path
 import wandb
 import os
 import torch.distributed as dist
-
+import torch
+import matplotlib.pyplot as plt
 
 def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
     """Save images to the disk.
@@ -60,6 +61,7 @@ class Visualizer:
         self.saved = False
         self.use_wandb = True  #opt.use_wandb
         self.current_epoch = 0
+        self.cmap = plt.cm.get_cmap("tab20", 12)
 
         # Initialize wandb if enabled
         if self.use_wandb:
@@ -94,6 +96,17 @@ class Visualizer:
         """Calculate global step from epoch and epoch_iter"""
         # Assuming epoch starts from 1 and epoch_iter is cumulative within epoch
         return (epoch - 1) * self.dataset_size + epoch_iter
+    
+    def preprocess_visual(self, image, label):
+        if "seg" in label or "mask" in label:
+            # For segmentation maps, convert to color images for better visualization
+            pred_labels = torch.argmax(image, dim=1)[0]
+
+            colored = self.cmap(pred_labels.cpu().numpy())[:, :, :3]  # drop alpha
+            colored = (colored * 255).astype(np.uint8)
+            return colored
+        else:
+            return util.tensor2im(image)
 
     def display_current_results(self, visuals, epoch: int, total_iters: int, save_result=False):
         """Save current results to wandb and HTML file."""
@@ -104,7 +117,7 @@ class Visualizer:
         if self.use_wandb:
             ims_dict = {}
             for label, image in visuals.items():
-                image_numpy = util.tensor2im(image)
+                image_numpy = self.preprocess_visual(image, label)
                 wandb_image = wandb.Image(image_numpy, caption=f"{label} - Step {total_iters}")
                 ims_dict[f"results/{label}"] = wandb_image
             self.wandb_run.log(ims_dict, step=total_iters)
@@ -113,7 +126,7 @@ class Visualizer:
             self.saved = True
             # save images to the disk
             for label, image in visuals.items():
-                image_numpy = util.tensor2im(image)
+                image_numpy = self.preprocess_visual(image, label)
                 img_path = self.img_dir / f"epoch{epoch:03d}_{label}.png"
                 util.save_image(image_numpy, img_path)
 
