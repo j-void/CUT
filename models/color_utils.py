@@ -87,3 +87,45 @@ class StyleLoss(nn.Module):
             style_loss += F.mse_loss(gen_gram, target_gram)
         
         return style_loss / len(self.layer_names)
+    
+
+class ClassConditionalStyleLoss(nn.Module):
+    def __init__(self, num_classes, layers=['conv1_2', 'conv2_2', 'conv3_3', 'conv4_3']):
+        super().__init__()
+        self.style_loss = StyleLoss(layers=layers)
+        self.num_classes = num_classes
+    
+    def forward(self, generated, real, gen_masks, real_masks):
+        """
+        Compare style per semantic class
+        generated: [B, 3, H, W]
+        real: [B, 3, H, W]  
+        gen_masks, real_masks: [B, H, W] - segmentation
+        """
+        total_loss = 0.0
+        num_valid = 0
+
+        for class_id in range(self.num_classes):
+            # Get masks for this class
+            gen_class_mask = (gen_masks == class_id)
+            real_class_mask = (real_masks == class_id)
+            
+            if gen_class_mask.sum() < 100 or real_class_mask.sum() < 100:
+                continue  # Skip if too few pixels
+            
+            # Mask out other classes (set to 0 or mean)
+            gen_masked = generated.clone()
+            real_masked = real.clone()
+
+            gen_mask_expanded = gen_class_mask.unsqueeze(1).expand(-1, 3, -1, -1)   # [B, 3, H, W]
+            real_mask_expanded = real_class_mask.unsqueeze(1).expand(-1, 3, -1, -1) # [B, 3, H, W]
+
+            gen_masked[~gen_mask_expanded] = 0
+            real_masked[~real_mask_expanded] = 0
+            
+            # Compute style loss for this class
+            loss = self.style_loss(gen_masked, real_masked)
+            total_loss += loss
+            num_valid += 1
+        
+        return total_loss / max(num_valid, 1)
