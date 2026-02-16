@@ -7,6 +7,7 @@ import util.util as util
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from . import color_utils
 
 
 class CUTModel(BaseModel):
@@ -72,8 +73,7 @@ class CUTModel(BaseModel):
         #self.loss_names += ['red'] #['red', 'color']
         #self.visual_names += ['edge_gen', 'edge_gt']
         if self.isTrain:
-            self.visual_names += ['pred_seg', 'real_mask_onehot']
-            self.loss_names += ['seg']
+            self.loss_names += ['style']
 
         ## set default loss weights
         for name in self.loss_names:
@@ -117,6 +117,7 @@ class CUTModel(BaseModel):
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionRed = torch.nn.MSELoss().to(self.device)
+            self.criterionStyle = color_utils.StyleLoss().to(self.device)
             self.criterionNCE = []
 
             self.criterionSeg = torch.nn.CrossEntropyLoss().to(self.device)
@@ -267,9 +268,10 @@ class CUTModel(BaseModel):
         self.loss_seg = self.criterionSeg(self.pred_seg, torch.argmax(self.real_mask_onehot, dim=1)) * 1.0
         #self.loss_color = (self.criterionColor(self.fake_B, self.real_A_mask) + self.criterionColor(self.idt_B, self.real_B_mask) if self.opt.nce_idt else 0.0) * 1.0
         #self.loss_edge, self.edge_gen, self.edge_gt = self.criterionEdge(self.real_A, self.real_A_mask, self.fake_B)
-                                                
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_seg #+ self.loss_red #+ self.loss_edge * self.lambda_edge
+        self.loss_style = self.criterionStyle(self.fake_B, self.real_B) * 10.0                  
+
+        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_style #+ self.loss_red #+ self.loss_edge * self.lambda_edge
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):
