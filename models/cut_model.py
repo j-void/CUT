@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from . import color_utils
+from .segmentation import ContrastiveAlignment
 
 
 class CUTModel(BaseModel):
@@ -73,7 +74,7 @@ class CUTModel(BaseModel):
         #self.loss_names += ['red'] #['red', 'color']
         #self.visual_names += ['edge_gen', 'edge_gt']
         if self.isTrain:
-            self.loss_names += ['style']
+            self.loss_names += ['style', 'align']
 
         ## set default loss weights
         for name in self.loss_names:
@@ -97,21 +98,6 @@ class CUTModel(BaseModel):
             self.netD = networks.define_D(3+self.opt.num_classes, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
 
-            # opt.color_num_bins = 16
-            # opt.color_emb_dim = 32
-            # self.color_embedder = nn.Sequential( ## Add this to optimizer too
-            #     nn.Linear(opt.color_num_bins * 3, 128),
-            #     nn.ReLU(),
-            #     nn.Linear(128, opt.color_emb_dim)
-            # )
-
-            # self.criterionColor = ColorLoss(
-            #     embedder=self.color_embedder,
-            #     patch_size=32,
-            #     num_bins=opt.color_num_bins,
-            #     emb_dim=opt.color_emb_dim
-            # ).to(self.device)
-
             self.criterionEdge = EdgeLoss(alpha=0.99).to(self.device)
 
             # define loss functions
@@ -120,7 +106,7 @@ class CUTModel(BaseModel):
             self.criterionStyle = color_utils.StyleLoss().to(self.device)
             self.criterionNCE = []
 
-            self.criterionSeg = torch.nn.CrossEntropyLoss().to(self.device)
+            self.criterionAlign = ContrastiveAlignment().to(self.device)
 
             for nce_layer in self.nce_layers:
                 self.criterionNCE.append(PatchNCELoss(opt).to(self.device))
@@ -169,13 +155,12 @@ class CUTModel(BaseModel):
         self.optimizer_G.zero_grad()
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.zero_grad()
-        # self.optimizer_C.zero_grad()
         self.loss_G = self.compute_G_loss()
         self.loss_G.backward()
         self.optimizer_G.step()
         if self.opt.netF == 'mlp_sample':
             self.optimizer_F.step()
-        # self.optimizer_C.step()
+
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -202,9 +187,6 @@ class CUTModel(BaseModel):
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
 
-        # if self.opt.isTrain and torch.rand(1).item() < 0.3: ## add some reguralization
-        #     self.real_A_mask_onehot = torch.zeros_like(self.real_A_mask_onehot).to(self.real_A_mask_onehot.device)
-        #     self.real_B_mask_onehot = torch.zeros_like(self.real_B_mask_onehot).to(self.real_B_mask_onehot.device)
 
         self.real = torch.cat((self.real_A, self.real_B), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A
         self.real_mask_onehot = torch.cat((self.real_A_mask_onehot, self.real_B_mask_onehot), dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A_mask_onehot
@@ -216,15 +198,14 @@ class CUTModel(BaseModel):
                 self.real = torch.flip(self.real, [3])
                 self.real_mask_onehot = torch.flip(self.real_mask_onehot, [3])
 
-        ## Used when generating two-channel output
-        # self.fake_green_blue = self.netG(self.real)
-        # self.fake = torch.cat([self.real[:,0:1,:,:], self.fake_green_blue], dim=1)   
-
-        self.fake, self.pred_seg = self.netG(self.real, self.real_mask_onehot)
+        self.fake, self.decoder_feats = self.netG(self.real, self.real_mask_onehot)
 
         self.fake_B = self.fake[:self.real_A.size(0)]
+        self.fake_B_dfeats = [f[:self.real_A.size(0)] for f in self.decoder_feats]
+
         if self.opt.nce_idt:
             self.idt_B = self.fake[self.real_A.size(0):]
+            self.idt_B_dfeats = [f[self.real_A.size(0):] for f in self.decoder_feats]
 
     def compute_D_loss(self):
         """Calculate GAN loss for the discriminator"""
@@ -265,13 +246,11 @@ class CUTModel(BaseModel):
 
         #self.loss_red = self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.1
 
-        self.loss_seg = self.criterionSeg(self.pred_seg, torch.argmax(self.real_mask_onehot, dim=1)) * 1.0
-        #self.loss_color = (self.criterionColor(self.fake_B, self.real_A_mask) + self.criterionColor(self.idt_B, self.real_B_mask) if self.opt.nce_idt else 0.0) * 1.0
-        #self.loss_edge, self.edge_gen, self.edge_gt = self.criterionEdge(self.real_A, self.real_A_mask, self.fake_B)
+        self.loss_style = self.criterionStyle(self.fake_B, self.real_B) * 10.0
 
-        self.loss_style = self.criterionStyle(self.fake_B, self.real_B) * 10.0                  
+        self.loss_align = self.criterionAlign(self.fake_B_dfeats, self.idt_B_dfeats, self.real_A_mask_onehot, self.real_B_mask_onehot) * 1.0               
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_style #+ self.loss_red #+ self.loss_edge * self.lambda_edge
+        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_style + self.loss_align #+ self.loss_red #+ self.loss_edge * self.lambda_edge
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):

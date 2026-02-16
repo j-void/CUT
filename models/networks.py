@@ -748,18 +748,8 @@ class S_Resnet(nn.Module):
         n_downsample = num_downs
         pad_type = 'reflect'
         self.enc_content = ContentEncoder(n_downsample, n_res, input_nc, ngf, norm, nl_layer, pad_type=pad_type)
-        self.dec = S_Decoder(n_downsample, n_res, self.enc_content.output_dim, output_nc, norm=norm, activ=nl_layer, pad_type=pad_type, nz=0, num_classes=num_classes)
+        self.dec = Con_Decoder(n_downsample, n_res, self.enc_content.output_dim, output_nc, norm=norm, activ=nl_layer, pad_type=pad_type, nz=0)
 
-        # self.seg_fuser_bottleneck = nn.Conv2d(self.enc_content.output_dim + num_classes,
-        #                                       self.enc_content.output_dim,
-        #                                       kernel_size=3, padding=1)
-        # # For decoder-level fusion, use small convs per decoder block if desired
-        # self.seg_fuser_decoder = nn.ModuleList([
-        #     nn.Conv2d(dec_in_ch + num_classes, dec_in_ch, kernel_size=3, padding=1)
-        #     for dec_in_ch in self.dec.in_channels_list
-        # ])
-
-        # self.seg_layers = 3 #seg_layers if seg_layers is not None else list(range(len(self.dec.blocks)))
 
     def decode(self, content):
         
@@ -819,6 +809,45 @@ class S_Decoder(nn.Module):
             x = block(x)
         return self.color_block(x), self.seg_block(x)
 
+class Con_Decoder(nn.Module):
+    def __init__(self, n_upsample, n_res, dim, output_dim, norm='batch', activ='relu', pad_type='zero', nz=0):
+        super(Con_Decoder, self).__init__()
+
+        blocks = []
+        self.in_channels_list = []
+
+        # 1) ResBlocks as first logical block
+        blocks.append(ResBlocks(n_res, dim, norm, activ, pad_type=pad_type, nz=nz))
+        self.in_channels_list.append(dim)
+
+        # 2) For each upsample: make a single Sequential block (Upsample + Conv block)
+        for i in range(n_upsample):
+            if i == 0:
+                input_dim = dim + nz
+            else:
+                input_dim = dim
+            
+            self.in_channels_list.append(input_dim)
+            up_block = nn.Sequential(
+                Upsample2(scale_factor=2),
+                Conv2dBlock(input_dim, dim // 2, 5, 1, 2, norm='ln', activation=activ, pad_type='reflect')
+            )
+            blocks.append(up_block)
+            dim = dim // 2
+
+        # 3) Final conv as last logical block
+        final = Conv2dBlock(dim, output_dim, 7, 1, 3, norm='none', activation='tanh', pad_type='reflect')
+        blocks.append(final)
+
+        # store as ModuleList so blocks align 1:1 with in_channels_list
+        self.blocks = nn.ModuleList(blocks)
+
+    def forward(self, x):
+        feats = []
+        for block in self.blocks:
+            x = block(x)
+            feats.append(x)
+        return x, feats[:-1]
 
 
 class E_adaIN(nn.Module):
