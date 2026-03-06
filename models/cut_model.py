@@ -64,7 +64,8 @@ class CUTModel(BaseModel):
         # The training/test scripts will call <BaseModel.get_current_losses>
         self.loss_names = ['G_GAN', 'D_real', 'D_fake', 'G', 'NCE']
         self.visual_names = ['real_A', 'fake_B', 'real_B']
-        self.nce_layers = [int(i) for i in self.opt.nce_layers.split(',')]
+        #self.nce_layers = [int(i) for i in self.opt.nce_layers.split(',')]
+        self.nce_layers = [0, 3, 5, 6, 7] # default layers kept fixed
 
         if opt.nce_idt and self.isTrain:
             self.loss_names += ['NCE_Y']
@@ -95,22 +96,6 @@ class CUTModel(BaseModel):
 
         if self.isTrain:
             self.netD = networks.define_D(3+self.opt.num_classes, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
-
-
-            # opt.color_num_bins = 16
-            # opt.color_emb_dim = 32
-            # self.color_embedder = nn.Sequential( ## Add this to optimizer too
-            #     nn.Linear(opt.color_num_bins * 3, 128),
-            #     nn.ReLU(),
-            #     nn.Linear(128, opt.color_emb_dim)
-            # )
-
-            # self.criterionColor = ColorLoss(
-            #     embedder=self.color_embedder,
-            #     patch_size=32,
-            #     num_bins=opt.color_num_bins,
-            #     emb_dim=opt.color_emb_dim
-            # ).to(self.device)
 
             self.criterionEdge = EdgeLoss(alpha=0.99).to(self.device)
 
@@ -257,15 +242,13 @@ class CUTModel(BaseModel):
         if self.opt.nce_idt and self.opt.lambda_NCE > 0.0:
             self.loss_NCE_Y_masked, self.loss_NCE_Y = self.calculate_masked_NCE_loss(self.real_B, self.idt_B, mask=self.real_B_mask, mask_onehot=self.real_B_mask_onehot)
             # print("loss_NCE_Y_masked:", self.loss_NCE_Y_masked, "loss_NCE_Y:", self.loss_NCE_Y)
-            loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.5 #+ (self.loss_NCE_masked + self.loss_NCE_Y_masked) * 0.25
+            loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.25 + (self.loss_NCE_masked + self.loss_NCE_Y_masked) * 0.25
         else:
-            loss_NCE_both = (self.loss_NCE ) #+ self.loss_NCE_Y_masked) * 0.5
+            loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y_masked) * 0.5
 
         #self.loss_red = self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.1
 
 
-        #self.loss_color = (self.criterionColor(self.fake_B, self.real_A_mask) + self.criterionColor(self.idt_B, self.real_B_mask) if self.opt.nce_idt else 0.0) * 1.0
-        #self.loss_edge, self.edge_gen, self.edge_gt = self.criterionEdge(self.real_A, self.real_A_mask, self.fake_B)
 
         self.loss_style = self.criterionStyle(self.fake_B, self.real_B) * 10.0                  
 
@@ -292,7 +275,7 @@ class CUTModel(BaseModel):
 
     def calculate_masked_NCE_loss(self, src, tgt, mask=None, mask_onehot=None):
         feat_q = self.netG(tgt, mask_onehot, self.nce_layers, encode_only=True)
-        
+
         resized_masks = []
         for f_q in feat_q:
             _, _, h, w = f_q.shape

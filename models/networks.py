@@ -887,11 +887,14 @@ class ContentEncoder(nn.Module):
             self.model += [Conv2dBlock(dim, 2 * dim, 4, 2, 1, norm=norm, activation=activ, pad_type='reflect')]
             dim *= 2
         # residual blocks
-        self.model += [ResBlocks(n_res, dim, norm=norm, activation=activ, pad_type=pad_type)]
+        # self.model += [ResBlocks(n_res, dim, norm=norm, activation=activ, pad_type=pad_type)] ## wrong
+        for i in range(n_res):
+            self.model += [ResBlock(dim, norm=norm, activation=activ, pad_type=pad_type, nz=0)]
         self.model = nn.Sequential(*self.model)
         self.output_dim = dim
 
     def forward(self, x, nce_layers=[], encode_only=False):
+
         if len(nce_layers) > 0:
             feat = x
             feats = []
