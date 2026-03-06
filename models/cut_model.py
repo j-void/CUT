@@ -74,7 +74,7 @@ class CUTModel(BaseModel):
         #self.loss_names += ['red'] #['red', 'color']
         #self.visual_names += ['edge_gen', 'edge_gt']
         if self.isTrain:
-            self.loss_names += ['style', 'align']
+            self.loss_names += ['style']
 
         ## set default loss weights
         for name in self.loss_names:
@@ -105,8 +105,6 @@ class CUTModel(BaseModel):
             self.criterionRed = torch.nn.MSELoss().to(self.device)
             self.criterionStyle = color_utils.StyleLoss().to(self.device)
             self.criterionNCE = []
-
-            self.criterionAlign = ContrastiveAlignment().to(self.device)
 
             for nce_layer in self.nce_layers:
                 self.criterionNCE.append(PatchNCELoss(opt).to(self.device))
@@ -248,9 +246,8 @@ class CUTModel(BaseModel):
 
         self.loss_style = self.criterionStyle(self.fake_B, self.real_B) * 10.0
 
-        self.loss_align = self.criterionAlign(self.fake_B_dfeats, self.idt_B_dfeats, self.real_A_mask_onehot, self.real_B_mask_onehot) * 1.0               
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_style + self.loss_align #+ self.loss_red #+ self.loss_edge * self.lambda_edge
+        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_style #+ self.loss_red #+ self.loss_edge * self.lambda_edge
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):
