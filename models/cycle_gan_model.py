@@ -184,13 +184,13 @@ class CycleGANModel(BaseModel):
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
         # combined loss and calculate gradients
         self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
-        if self.opt.amp:
+        if getattr(self.opt, 'amp', False):
             with amp.scale_loss(self.loss_G, self.optimizer_G) as scaled_loss:
                 scaled_loss.backward()
         else:
             self.loss_G.backward()
 
-    def data_dependent_initialize(self):
+    def data_dependent_initialize(self, data):
         return
 
     def generate_visuals_for_evaluation(self, data, mode):

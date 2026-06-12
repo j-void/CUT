@@ -52,6 +52,7 @@ if __name__ == '__main__':
     # print('creating web directory', web_dir)
     # webpage = html.HTML(web_dir, 'Experiment = %s, Phase = %s, Epoch = %s' % (opt.name, opt.phase, opt.epoch))
     os.makedirs(os.path.join(opt.results_dir, opt.name + '_results', 'test'), exist_ok=True)
+    
     for i, data in enumerate(dataset):
         if i == 0:
             model.data_dependent_initialize(data)
@@ -68,7 +69,7 @@ if __name__ == '__main__':
         result = torch.cat([v[0] for v in visuals.values()], 2)
         path = os.path.join(opt.results_dir, opt.name + '_results', 'test',
                         str(i + 1) + '.png')
-        plt.imsave(path, (result.cpu().detach().numpy().transpose(1, 2, 0) + 1) / 2)
+        #plt.imsave(path, (result.cpu().detach().numpy().transpose(1, 2, 0) + 1) / 2)
     #     if i % 5 == 0:  # save images to an HTML file
     #         print('processing (%04d)-th image... %s' % (i, img_path))
     #     save_images(webpage, visuals, img_path, width=opt.display_winsize)

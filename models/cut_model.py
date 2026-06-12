@@ -218,7 +218,8 @@ class CUTModel(BaseModel):
         # self.fake_green_blue = self.netG(self.real)
         # self.fake = torch.cat([self.real[:,0:1,:,:], self.fake_green_blue], dim=1)   
 
-        self.fake = self.netG(self.real, self.real_mask_onehot)
+        #self.fake = self.netG(self.real, self.real_mask_onehot)
+        self.fake = self.netG(self.real)
 
         self.fake_B = self.fake[:self.real_A.size(0)]
         if self.opt.nce_idt:

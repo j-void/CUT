@@ -39,7 +39,7 @@ def make_mask_dataset(dir, mask_dir, max_dataset_size=float("inf")):
 
     for root, _, fnames in sorted(os.walk(dir, followlinks=True)):
         for fname in fnames:
-            if is_image_file(fname):
+            if is_image_file(fname) and "image" in fname:
                 path = os.path.join(root, fname)
                 images.append(path)
                 mask_path = os.path.join(mask_dir, fname)
