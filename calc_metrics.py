@@ -191,7 +191,7 @@ def run_model_inference(opt, out_dir, LPIPS_metric):
         metrics_vals['LPIPS'].append(lpips_value)
 
         # Save side-by-side strip (real_A | fake_B | real_B)
-        strip = torch.cat([v[0] for v in visuals.values()][:2], 2)
+        strip = torch.cat([v[0] for v in visuals.values()], 2)
         strip_path = os.path.join(out_dir, f'{i + 1}.png')
         plt.imsave(strip_path, (strip.cpu().detach().numpy().transpose(1, 2, 0) + 1) / 2)
 
@@ -231,6 +231,7 @@ if __name__ == '__main__':
     opt.serial_batches = True
     opt.no_flip      = True
     opt.display_id   = -1
+    opt.use_val_data = True
 
     opt.results_dir  = "./evaluation_results/"
     name             = opt.name if not pre_args.precomputed_dir else os.path.basename(pre_args.precomputed_dir.rstrip('/'))
@@ -264,21 +265,21 @@ if __name__ == '__main__':
         for metric_name, vals in metrics_vals.items()
     }
 
-    # -----------------------------------------------------------------------
-    # Fidelity metrics (FID, KID, IS, Precision/Recall)
-    # -----------------------------------------------------------------------
-    fidelity_metrics_dict = torch_fidelity.calculate_metrics(
-        input1=fid_input_dir,
-        input2=fid_gt_dir,
-        cuda=True,
-        isc=True,
-        fid=True,
-        kid=True,
-        kid_subset_size=50,
-        prc=True,
-        verbose=False,
-    )
-    metrics_dict.update(fidelity_metrics_dict)
+    # # -----------------------------------------------------------------------
+    # # Fidelity metrics (FID, KID, IS, Precision/Recall)
+    # # -----------------------------------------------------------------------
+    # fidelity_metrics_dict = torch_fidelity.calculate_metrics(
+    #     input1=fid_input_dir,
+    #     input2=fid_gt_dir,
+    #     cuda=True,
+    #     isc=True,
+    #     fid=True,
+    #     kid=True,
+    #     kid_subset_size=50,
+    #     prc=True,
+    #     verbose=False,
+    # )
+    # metrics_dict.update(fidelity_metrics_dict)
 
     # -----------------------------------------------------------------------
     # Write results

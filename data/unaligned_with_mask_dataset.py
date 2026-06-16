@@ -38,6 +38,13 @@ class UnalignedWithMaskDataset(BaseDataset):
 
         self.A_paths, self.A_masks = make_mask_dataset(self.dir_A, self.mask_dir_A, opt.max_dataset_size)   # load images from '/path/to/data/trainA'
         self.B_paths, self.B_masks = make_mask_dataset(self.dir_B, self.mask_dir_B, opt.max_dataset_size)  # load images from '/path/to/data/trainB'
+        if opt.use_val_data:
+            val_A_paths, val_A_masks = make_mask_dataset(os.path.join(opt.dataroot, "val" + 'A'), os.path.join(opt.dataroot, "val_mask"), opt.max_dataset_size)
+            val_B_paths, val_B_masks = make_mask_dataset(os.path.join(opt.dataroot, "val" + 'B'), os.path.join(opt.dataroot, "val_mask"), opt.max_dataset_size)
+            self.A_paths += val_A_paths
+            self.A_masks += val_A_masks
+            self.B_paths += val_B_paths
+            self.B_masks += val_B_masks
         self.A_size = len(self.A_paths)  # get the size of dataset A
         self.B_size = len(self.B_paths)  # get the size of dataset B
 
