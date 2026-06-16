@@ -257,9 +257,9 @@ class CUTModel(BaseModel):
         if self.opt.nce_idt and self.opt.lambda_NCE > 0.0:
             self.loss_NCE_Y_masked, self.loss_NCE_Y = self.calculate_masked_NCE_loss(self.real_B, self.idt_B, mask=self.real_B_mask, mask_onehot=self.real_B_mask_onehot)
             # print("loss_NCE_Y_masked:", self.loss_NCE_Y_masked, "loss_NCE_Y:", self.loss_NCE_Y)
-            loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.5 #+ (self.loss_NCE_masked + self.loss_NCE_Y_masked) * 0.25
+            loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y) * 0.25 + (self.loss_NCE_masked + self.loss_NCE_Y_masked) * 0.25
         else:
-            loss_NCE_both = (self.loss_NCE ) #+ self.loss_NCE_Y_masked) * 0.5
+            loss_NCE_both = (self.loss_NCE + self.loss_NCE_Y_masked) * 0.5
 
         #self.loss_red = self.criterionRed(self.fake[:, 0:1, :, :], self.real[:, 0:1, :, :]) * 0.1
 
