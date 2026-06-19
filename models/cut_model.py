@@ -218,7 +218,8 @@ class CUTModel(BaseModel):
         # self.fake_green_blue = self.netG(self.real)
         # self.fake = torch.cat([self.real[:,0:1,:,:], self.fake_green_blue], dim=1)   
 
-        self.fake = self.netG(self.real, self.real_mask_onehot)
+        #self.fake = self.netG(self.real, self.real_mask_onehot)
+        self.fake = self.netG(self.real)
 
         self.fake_B = self.fake[:self.real_A.size(0)]
         if self.opt.nce_idt:
@@ -269,7 +270,7 @@ class CUTModel(BaseModel):
 
         self.loss_style = self.criterionStyle(self.fake_B, self.real_B) * 10.0                  
 
-        self.loss_G = self.loss_G_GAN + loss_NCE_both + self.loss_style #+ self.loss_red #+ self.loss_edge * self.lambda_edge
+        self.loss_G = self.loss_G_GAN + loss_NCE_both #+ self.loss_style #+ self.loss_red #+ self.loss_edge * self.lambda_edge
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):
@@ -291,7 +292,8 @@ class CUTModel(BaseModel):
         return total_nce_loss / n_layers
 
     def calculate_masked_NCE_loss(self, src, tgt, mask=None, mask_onehot=None):
-        feat_q = self.netG(tgt, mask_onehot, self.nce_layers, encode_only=True)
+        #feat_q = self.netG(tgt, mask_onehot, self.nce_layers, encode_only=True)
+        feat_q = self.netG(tgt, self.nce_layers, encode_only=True)
         
         resized_masks = []
         for f_q in feat_q:
@@ -299,7 +301,8 @@ class CUTModel(BaseModel):
             resized_mask = torch.nn.functional.interpolate(mask.unsqueeze(1).float(), size=(h, w), mode='nearest')
             resized_masks.append(resized_mask)
         
-        feat_k = self.netG(src, mask_onehot, self.nce_layers, encode_only=True)
+        #feat_k = self.netG(src, mask_onehot, self.nce_layers, encode_only=True)
+        feat_k = self.netG(src, self.nce_layers, encode_only=True)
 
 
         total_nce_loss = 0.0
