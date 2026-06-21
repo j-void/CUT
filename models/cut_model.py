@@ -94,7 +94,7 @@ class CUTModel(BaseModel):
         self.netF_masked = networks.define_F(opt.input_nc, "masked_sample", opt.normG, not opt.no_dropout, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
         if self.isTrain:
-            self.netD = networks.define_D(3+self.opt.num_classes, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
+            self.netD = networks.define_D(3, opt.ndf, opt.netD, opt.n_layers_D, opt.normD, opt.init_type, opt.init_gain, opt.no_antialias, self.gpu_ids, opt)
 
 
             # opt.color_num_bins = 16
@@ -229,10 +229,12 @@ class CUTModel(BaseModel):
         """Calculate GAN loss for the discriminator"""
         fake = self.fake_B.detach()
         # Fake; stop backprop to the generator by detaching fake_B
-        pred_fake = self.netD(torch.cat([fake, self.real_A_mask_onehot], dim=1))
+        #pred_fake = self.netD(torch.cat([fake, self.real_A_mask_onehot], dim=1))
+        pred_fake = self.netD(fake)
         self.loss_D_fake = self.criterionGAN(pred_fake, False).mean()
         # Real
-        self.pred_real = self.netD(torch.cat([self.real_B, self.real_B_mask_onehot], dim=1))
+        #self.pred_real = self.netD(torch.cat([self.real_B, self.real_B_mask_onehot], dim=1))
+        self.pred_real = self.netD(self.real_B)
         loss_D_real = self.criterionGAN(self.pred_real, True)
         self.loss_D_real = loss_D_real.mean()
 
@@ -245,7 +247,8 @@ class CUTModel(BaseModel):
         fake = self.fake_B
         # First, G(A) should fake the discriminator
         if self.opt.lambda_GAN > 0.0:
-            pred_fake = self.netD(torch.cat([fake, self.real_A_mask_onehot], dim=1))
+            #pred_fake = self.netD(torch.cat([fake, self.real_A_mask_onehot], dim=1))
+            pred_fake = self.netD(fake)
             self.loss_G_GAN = self.criterionGAN(pred_fake, True).mean() * self.opt.lambda_GAN
         else:
             self.loss_G_GAN = 0.0
